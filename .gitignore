@@ -1,0 +1,14 @@
+*.iml
+.idea/
+.gradle/
+.cxx/
+app/build/
+build/
+#/gradle.properties
+local.properties
+app/app.iml
+app/obj/
+app/libs/armeabi
+app/libs/mips
+.DS_Store
+/build
