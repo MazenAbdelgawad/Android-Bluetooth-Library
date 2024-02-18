@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Android-Bluetooth-Library"
 include(":app")
- 
+include(":android-bluetooth-library")
