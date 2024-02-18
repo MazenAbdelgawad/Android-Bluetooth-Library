@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.mazenabdelgawad.library.androidbluetooth"
+    namespace = "com.mazenabdelgawad.library.android.bluetooth"
     compileSdk = 34
 
     defaultConfig {

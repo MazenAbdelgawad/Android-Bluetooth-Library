@@ -1,4 +1,4 @@
-package com.mazenabdelgawad.library.androidbluetooth
+package com.mazenabdelgawad.library.android.bluetooth
 
 import org.junit.Test
 
