@@ -25,6 +25,7 @@ abstract class BluetoothKit {
     protected var secureUUIDOfSDP = UUID.fromString("df6b743c-1959-4442-9c8a-3b9204dc164b")
 
     private var mSecureAcceptThread: AcceptThread? = null  // Server Side (Host)
+    private var mConnectThread: ConnectThread? = null      // Client Side
 
     /**
      * enum class that represent the current connection state.
@@ -499,6 +500,125 @@ abstract class BluetoothKit {
             }
 
         }
+    }
+
+
+    //************************************ Client-Kit ***************************************
+
+    /**
+     * Start the ConnectThread to initiate a connection to a remote device (toServer "host").
+
+     * @param hardwareAddress The String of the paired BluetoothDevice to connect
+     */
+    fun connectToBluetoothServer(hardwareAddress: String) {
+        val bluetoothDevice = this.mapBluetoothDevice(hardwareAddress) ?: return
+        this.connectClientToBluetoothServer(bluetoothDevice)
+    }
+
+    /**
+     * Start the ConnectThread to initiate a connection to a remote device (toServer "host").
+
+     * @param device The BluetoothDevice to connect
+     */
+    fun connectToBluetoothServer(device: BluetoothDevice) {
+        if (device == null) return
+        this.connectClientToBluetoothServer(device)
+    }
+
+    /**
+     * Start the ConnectThread to initiate a connection to a remote device.
+
+     * @param device The BluetoothDevice to connect
+     *
+     */
+    @Synchronized
+    private fun connectClientToBluetoothServer(device: BluetoothDevice) {
+        Log.d(TAG, "connect to: ${device.name}/${device.type}/${device.address}")
+
+        // Cancel any thread currently running
+        this.stop()
+
+        // Start the thread to connect with the given device
+        mConnectThread = ConnectThread(device)
+        mConnectThread?.start()
+
+        // Update UI here
+    }
+
+
+    /**
+     * This thread runs while attempting to make an outgoing connection
+     * with a device. It runs straight through; the connection either
+     * succeeds or fails.
+     */
+    // Client Side
+    private inner class ConnectThread(private val mmDevice: BluetoothDevice) : Thread() {
+        private val mmSocket: BluetoothSocket?
+
+        init {
+            var tmp: BluetoothSocket? = null
+
+            // Get a BluetoothSocket for a connection with the
+            // given BluetoothDevice
+            try {
+                tmp = mmDevice.createRfcommSocketToServiceRecord(secureUUIDOfSDP)
+                mState = BluetoothKit.State.CONNECTING
+                notifyHandler(HandlerMessage.CONNECTING)
+            } catch (e: IOException) {
+                mState = BluetoothKit.State.DISCONNECTED
+                Log.e(TAG, "Connect to Server socket create() failed", e)
+            }
+
+            mmSocket = tmp
+        }
+
+        override fun run() {
+            if (mmSocket == null) {
+                connectionFailed()
+                return
+            }
+
+            Log.i(TAG, "BEGIN mConnectThread")
+            name = "ConnectThreadSecure"
+
+            // Always cancel discovery because it will slow down a connection
+            mBluetoothAdapter?.cancelDiscovery()
+
+            // Make a connection to the BluetoothSocket
+            try {
+                // This is a blocking call and will only return on a
+                // successful connection or an exception
+                mmSocket.connect()
+
+            } catch (e: IOException) {
+                // Close the socket
+                try {
+                    mmSocket.close()
+                } catch (e2: IOException) {
+                    Log.e(TAG, "unable to close() connect socket during connection failure", e2)
+                }
+
+                connectionFailed()
+                return
+            }
+
+            // Reset the ConnectThread because we're done
+            synchronized(this@BluetoothKit) {
+                mConnectThread = null
+            }
+
+            // Start the connected thread
+            connected(mmSocket, mmDevice, false)
+        }
+
+        fun cancel() {
+            try {
+                mmSocket?.close()
+            } catch (e: IOException) {
+                Log.e(TAG, "close() of connect socket failed", e)
+            }
+        }
+
     }
 
 }
