@@ -7,13 +7,19 @@ import android.bluetooth.BluetoothSocket
 import android.os.Bundle
 import android.os.Handler
 import android.util.Log
+import androidx.annotation.RequiresPermission
 import com.mazenabdelgawad.library.android.bluetooth.BuildConfig.*
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
 
-abstract class BluetoothKit {
+/**
+ * Created by Mazen Abdelgawad on 18/2/2024.
+ * Email: Mazen.Abdalgawad@gamil.com
+ */
+
+object BluetoothKit {
     private val TAG: String = javaClass.simpleName
 
     private val mBluetoothAdapter: BluetoothAdapter? by lazy { BluetoothAdapter.getDefaultAdapter() }
@@ -21,11 +27,19 @@ abstract class BluetoothKit {
     private var mState: State = State.DISCONNECTED
     private var mConnectedThread: ConnectedThread? = null  // Host/Client Side [depend on running]
 
-    protected var secureNameOfSDP = "BluetoothSecure"
-    protected var secureUUIDOfSDP = UUID.fromString("df6b743c-1959-4442-9c8a-3b9204dc164b")
+    private var secureNameOfSDP = "BluetoothSecure"
+    private var secureUUIDOfSDP: UUID = UUID.fromString("df6b743c-1959-4442-9c8a-3b9204dc164b")
 
     private var mSecureAcceptThread: AcceptThread? = null  // Server Side (Host)
     private var mConnectThread: ConnectThread? = null      // Client Side
+
+    /**
+     * Connect Bluetooth Device: used to send the connected bluetooth device in [Bundle] to handler
+     *
+     * @see notifyHandlerWithDeviceConnected
+     */
+    const val CONNECTED_BLUETOOTH_DEVICE = "CONNECTED_BLUETOOTH_DEVICE"
+
 
     /**
      * enum class that represent the current connection state.
@@ -58,13 +72,26 @@ abstract class BluetoothKit {
         SENT_MESSAGE(5)
     }
 
-    companion object {
-        /**
-         * Connect Bluetooth Device: used to send the connected bluetooth device in [Bundle] to handler
-         *
-         * @see notifyHandlerWithDeviceConnected
-         */
-        const val CONNECTED_BLUETOOTH_DEVICE = "CONNECTED_BLUETOOTH_DEVICE"
+    /**
+     * @param secureName to change secure connection name to custom name
+     * rather than using default secure name "BluetoothSecure"
+     *
+     * @Note: should change custom secure name before start the connection
+     */
+    @Synchronized
+    fun setCustomSecureNameOfSDP(secureName: String) {
+        this.secureNameOfSDP = secureName
+    }
+
+    /**
+     * @param secureUUID to change secure connection UUID to custom UUID
+     * rather than using default secure UUID "df6b743c-1959-4442-9c8a-3b9204dc164b"
+     *
+     * @Note: should change custom secure UUID before start the connection
+     */
+    @Synchronized
+    fun setCustomSecureUUIDOfSDP(secureUUID: UUID) {
+        this.secureUUIDOfSDP = secureUUID
     }
 
     /**
@@ -73,6 +100,14 @@ abstract class BluetoothKit {
     @Synchronized
     fun setHandler(handler: Handler) {
         mHandler = handler
+    }
+
+    /**
+     * To remove The Handler and stop to notify UI.
+     */
+    @Synchronized
+    fun removeHandler() {
+        mHandler = null
     }
 
     /**
@@ -157,17 +192,17 @@ abstract class BluetoothKit {
     }
 
     /**
-     * This method should be implement to Stop all threads
-     */
-
-    protected abstract fun onStop()
-
-    /**
      * Stop all threads
      */
     @Synchronized
     private fun stop() {
         Log.d(TAG, "stop")
+
+        // Cancel any thread attempting to make a connection
+        if (mConnectThread != null) {
+            mConnectThread?.cancel()
+            mConnectThread = null
+        }
 
         // Cancel any thread currently running a connection
         if (mConnectedThread != null) {
@@ -175,7 +210,11 @@ abstract class BluetoothKit {
             mConnectedThread = null
         }
 
-        this.onStop()
+        // Cancel the accept thread because we only want to connect to one device
+        if (mSecureAcceptThread != null) {
+            mSecureAcceptThread?.cancel()
+            mSecureAcceptThread = null
+        }
 
         mState = State.DISCONNECTED
     }
@@ -193,8 +232,6 @@ abstract class BluetoothKit {
         // Update UI
     }
 
-    protected abstract fun onConnectionLost(isHost: Boolean)
-
     /**
      * Indicate that the connection was lost and notify the UI.
      */
@@ -205,7 +242,10 @@ abstract class BluetoothKit {
 
         mState = State.DISCONNECTED
 
-
+        if (isHost && mBluetoothAdapter?.isEnabled == true) {
+            // Start the service over to restart listening mode
+            this.createBluetoothServerSocket()
+        }
     }
 
     /**
@@ -257,13 +297,16 @@ abstract class BluetoothKit {
 
 
     /**
-     * Write the ByteArray of data, out to the connected bluetooth device
+     * Write the String of Message, out to the connected bluetooth device
 
-     * @param out The bytes to write
+     * @param message The String to write
      * *
      * @see ConnectedThread.write
      */
-    fun write(out: ByteArray) {
+    fun write(message: String) {
+        if (message.isBlank()) return
+
+        val byteMessage = message.toByteArray()
         // Create temporary object
         var r: ConnectedThread? = null
         // Synchronize a copy of the ConnectedThread
@@ -272,7 +315,7 @@ abstract class BluetoothKit {
             r = mConnectedThread
         }
         // Perform the write unSynchronized
-        r?.write(out)
+        r?.write(byteMessage)
     }
 
     /**
@@ -280,7 +323,7 @@ abstract class BluetoothKit {
      * It handles all incoming and outgoing transmissions.
      */
     // Host/Client Side [depend on running]
-    private inner class ConnectedThread(
+    private class ConnectedThread(
         private val mmSocket: BluetoothSocket,
         private val isHost: Boolean
     ) : Thread() {
@@ -427,7 +470,7 @@ abstract class BluetoothKit {
      * (or until cancelled).
      */
     // ServerSide(host)
-    private inner class AcceptThread() : Thread() {
+    private class AcceptThread() : Thread() {
         // The local server socket
         private val mmServerSocket: BluetoothServerSocket?
 
@@ -473,7 +516,7 @@ abstract class BluetoothKit {
 
                 // If a connection was accepted
                 if (socket != null) {
-                    synchronized(this@BluetoothKit) {
+                    synchronized(this) {
                         if (mState == BluetoothKit.State.CONNECTING) { //or STATE_LISTEN
                             // Situation normal. Start the connected thread.
                             connected(socket, socket.remoteDevice, true)
@@ -506,11 +549,24 @@ abstract class BluetoothKit {
     //************************************ Client-Kit ***************************************
 
     /**
+     * This function get currently paired devices.
+     * @return an List<BluetoothDevice> of currently paired devices.
+     *
+     * @Note: be sure that bluetooth is enable before call this method to get list of devices
+     * @see isBluetoothEnable
+     * @see isBluetoothSupported
+     */
+    @RequiresPermission(value = "android.permission.BLUETOOTH")
+    fun getPairedBluetoothDevices(): List<BluetoothDevice>? {
+        return mBluetoothAdapter?.bondedDevices?.toList()
+    }
+
+    /**
      * Start the ConnectThread to initiate a connection to a remote device (toServer "host").
 
      * @param hardwareAddress The String of the paired BluetoothDevice to connect
      */
-    fun connectToBluetoothServer(hardwareAddress: String) {
+    fun connectToBluetoothHostServer(hardwareAddress: String) {
         val bluetoothDevice = this.mapBluetoothDevice(hardwareAddress) ?: return
         this.connectClientToBluetoothServer(bluetoothDevice)
     }
@@ -520,7 +576,7 @@ abstract class BluetoothKit {
 
      * @param device The BluetoothDevice to connect
      */
-    fun connectToBluetoothServer(device: BluetoothDevice) {
+    fun connectToBluetoothHostServer(device: BluetoothDevice) {
         if (device == null) return
         this.connectClientToBluetoothServer(device)
     }
@@ -552,7 +608,7 @@ abstract class BluetoothKit {
      * succeeds or fails.
      */
     // Client Side
-    private inner class ConnectThread(private val mmDevice: BluetoothDevice) : Thread() {
+    private class ConnectThread(private val mmDevice: BluetoothDevice) : Thread() {
         private val mmSocket: BluetoothSocket?
 
         init {
@@ -603,7 +659,7 @@ abstract class BluetoothKit {
             }
 
             // Reset the ConnectThread because we're done
-            synchronized(this@BluetoothKit) {
+            synchronized(this) {
                 mConnectThread = null
             }
 
