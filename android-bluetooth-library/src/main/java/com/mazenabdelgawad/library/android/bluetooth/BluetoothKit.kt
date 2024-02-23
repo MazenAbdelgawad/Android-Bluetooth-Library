@@ -2,6 +2,7 @@ package com.mazenabdelgawad.library.android.bluetooth
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.os.Bundle
 import android.os.Handler
@@ -15,13 +16,15 @@ import java.util.UUID
 abstract class BluetoothKit {
     private val TAG: String = javaClass.simpleName
 
-    private val mBluetoothAdapter: BluetoothAdapter by lazy { BluetoothAdapter.getDefaultAdapter() }
+    private val mBluetoothAdapter: BluetoothAdapter? by lazy { BluetoothAdapter.getDefaultAdapter() }
     private var mHandler: Handler? = null
     private var mState: State = State.DISCONNECTED
     private var mConnectedThread: ConnectedThread? = null  // Host/Client Side [depend on running]
 
     protected var secureNameOfSDP = "BluetoothSecure"
     protected var secureUUIDOfSDP = UUID.fromString("df6b743c-1959-4442-9c8a-3b9204dc164b")
+
+    private var mSecureAcceptThread: AcceptThread? = null  // Server Side (Host)
 
     /**
      * enum class that represent the current connection state.
@@ -80,13 +83,22 @@ abstract class BluetoothKit {
     }
 
     /**
+     * Check is bluetooth feature Supported on this hardware platform
+     *
+     * @Return
+     * true if Bluetooth adapter is supported on this hardware platform
+     * false if Bluetooth adapter not supported on this hardware platform
+     */
+    fun isBluetoothSupported(): Boolean = this.mBluetoothAdapter != null
+
+    /**
      * Check is bluetooth enabled
      *
      * @Return
      * true if Bluetooth adapter is Enable (open)
      * false if Bluetooth adapter is Disable (close)
      */
-    fun isBluetoothEnable(): Boolean = this.mBluetoothAdapter.isEnabled
+    fun isBluetoothEnable(): Boolean = this.mBluetoothAdapter?.isEnabled ?: false
 
     /**
      * Map a Bluetooth hardware address to object of BluetoothDevice.
@@ -100,7 +112,7 @@ abstract class BluetoothKit {
     fun mapBluetoothDevice(hardwareAddress: String): BluetoothDevice? {
         try {
             if (!BluetoothAdapter.checkBluetoothAddress(hardwareAddress)) return null
-            return mBluetoothAdapter.getRemoteDevice(hardwareAddress) ?: return null
+            return mBluetoothAdapter?.getRemoteDevice(hardwareAddress) ?: return null
         } catch (e: Throwable) {
             if (DEBUG) e.printStackTrace()
             return null
@@ -374,6 +386,119 @@ abstract class BluetoothKit {
             }
         }
 
+    }
+
+
+    //********************************* (Host) Server-Kit **************************************
+    /**
+     * Start the bluetooth Host Connection. Specifically start AcceptThread to begin a
+     * session in listening (server-side).
+     *
+     * Note: if the Bluetooth server was created before will be canceled and will create a new one (Restart).
+     */
+    @Synchronized
+    fun createBluetoothHostServerConnection() {
+        this.createBluetoothServerSocket()
+    }
+
+    /**
+     * Start the bluetooth service. Specifically start AcceptThread to begin a
+     * session in listening (server-side).
+     *
+     * Note: if the Bluetooth server was created before will be canceled and will create a new one (Restart).
+     */
+    @Synchronized
+    private fun createBluetoothServerSocket() {
+        Log.i(TAG, "createBluetoothServerSocket")
+
+        // Cancel any thread currently running
+        this.stop()
+
+        // Start the thread to listen on a BluetoothServerSocket
+        mSecureAcceptThread = AcceptThread()
+        mSecureAcceptThread?.start()
+        // Update UI
+    }
+
+    /**
+     * This thread runs while listening for incoming connections. It behaves
+     * like a server-side(host). It runs until a connection is accepted
+     * (or until cancelled).
+     */
+    // ServerSide(host)
+    private inner class AcceptThread() : Thread() {
+        // The local server socket
+        private val mmServerSocket: BluetoothServerSocket?
+
+        init {
+            var tmp: BluetoothServerSocket? = null
+
+            // Create a new listening server socket
+            try {
+                tmp = mBluetoothAdapter?.listenUsingRfcommWithServiceRecord(
+                    secureNameOfSDP,
+                    secureUUIDOfSDP
+                )
+                mState = BluetoothKit.State.CONNECTING //STATE_LISTEN
+                notifyHandler(HandlerMessage.CONNECTING)
+            } catch (e: IOException) {
+                mState = BluetoothKit.State.DISCONNECTED
+                Log.e(TAG, "Socket Type: [Secure], listen() failed", e)
+            }
+
+            mmServerSocket = tmp
+        }
+
+        override fun run() {
+            if (mmServerSocket == null) {
+                connectionFailed()
+                return
+            }
+            Log.d(TAG, "Socket Type: [Secure], BEGIN mAcceptThread $this")
+            name = "AcceptThreadSecure"
+
+            var socket: BluetoothSocket?
+
+            // Listen to the server socket if we're not connected
+            while (mState != BluetoothKit.State.CONNECTED) {
+                try {
+                    // This is a blocking call and will only return on a
+                    // successful connection or an exception
+                    socket = mmServerSocket?.accept()
+                } catch (e: IOException) {
+                    Log.e(TAG, "Socket's accept() method failed", e)
+                    break
+                }
+
+                // If a connection was accepted
+                if (socket != null) {
+                    synchronized(this@BluetoothKit) {
+                        if (mState == BluetoothKit.State.CONNECTING) { //or STATE_LISTEN
+                            // Situation normal. Start the connected thread.
+                            connected(socket, socket.remoteDevice, true)
+                        } else {
+                            // Either not ready or already connected. Terminate new socket.
+                            try {
+                                socket.close()
+                            } catch (e: IOException) {
+                                Log.e(TAG, "Could not close unwanted [accept] socket", e)
+                            }
+                        }
+                    }
+                }
+            }
+            Log.i(TAG, "END mAcceptThread")
+        }
+
+        fun cancel() {
+            Log.d(TAG, "Accept Socket cancel $this")
+            try {
+                mmServerSocket?.close()
+            } catch (e: IOException) {
+                Log.e(TAG, "Socket Type [Secure], close() of server failed", e)
+            }
+
+        }
     }
 
 }
